@@ -9,24 +9,30 @@
 #include <cstdint>
 #include <cstdlib>
 
+#include <filesystem>
+
 #include <fcntl.h>
 #include <unistd.h>
 
 namespace PIDTrace {
-  const int MAX_PROC_NAME     = 16;
-  const int MAX_COMM_PATH_LEN = (6 + 7 + 6 + 7 + 6);
+  typedef std::filesystem::directory_entry dir_entry;
 
-  union ProcessInfo {
-    char        name[MAX_PROC_NAME]{};
-    __uint128_t hash;
-  };
+  const int  MAX_PROC_NAME     = 16;
+  const int  MAX_COMM_PATH_LEN = (6 + 7 + 6 + 7 + 6);
+  const int  MAX_LOADAVG_SIZE  = (7 + 7 + 7 + 8 + 8 + 7);
+  const char LOAD_AVG_PATH[]   = "/proc/loadavg";
 
-  class ProcessID {
+  class Thread {
+    union _comm {
+      char        name[MAX_PROC_NAME]{};
+      __uint128_t hash;
+    };
+
   private:
-    int32_t     _pid;
-    int32_t     _tid;
-    ProcessInfo _process;
-    ProcessInfo _thread;
+    int32_t _pid;
+    int32_t _tid;
+    _comm   _process;
+    _comm   _thread;
 
     static inline bool _load(char* buffer, const char* format, ...) {
       char path[MAX_COMM_PATH_LEN] = { 0, };
@@ -39,7 +45,7 @@ namespace PIDTrace {
         va_end(lp_start);
       }
 
-      // load comm file
+      // load _comm file
       {
         int fd;
         ssize_t len;
@@ -59,7 +65,7 @@ namespace PIDTrace {
     }
 
   public:
-    inline ProcessID()
+    inline Thread()
       : _pid(-1),
         _tid(-1),
         _process(),
@@ -83,7 +89,7 @@ namespace PIDTrace {
     }
 
     [[nodiscard]] inline bool load_process(int pid) {
-      if (ProcessID::_load(this->_process.name, "/proc/%d/comm", pid)) {
+      if (Thread::_load(this->_process.name, "/proc/%d/comm", pid)) {
         this->_pid = pid;
         return true;
       }
@@ -91,8 +97,8 @@ namespace PIDTrace {
       return false;
     }
 
-    [[nodiscard]] inline bool load_thread(const ProcessID& process, int tid) {
-      if (!ProcessID::_load(this->_thread.name, "/proc/%d/task/%d/comm", process._pid, tid)) {
+    [[nodiscard]] inline bool load_thread(const Thread& process, int tid) {
+      if (!Thread::_load(this->_thread.name, "/proc/%d/task/%d/comm", process._pid, tid)) {
         return false;
       }
 
@@ -102,16 +108,41 @@ namespace PIDTrace {
 
       return true;
     }
+
+    [[nodiscard]] inline bool operator<(const Thread& rhs) const {
+      return this->_tid < rhs._tid;
+    }
+
+    [[nodiscard]] inline bool operator>(const Thread& rhs) const {
+      return this->_tid > rhs._tid;
+    }
+
+    [[nodiscard]] inline bool operator<=(const Thread& rhs) const {
+      return this->_tid <= rhs._tid;
+    }
+
+    [[nodiscard]] inline bool operator>=(const Thread& rhs) const {
+      return this->_tid >= rhs._tid;
+    }
+
+    [[nodiscard]] inline bool operator==(const Thread& rhs) const {
+      return this->_tid == rhs._tid && this->_thread.hash == rhs._thread.hash;
+    }
+
+    [[nodiscard]] inline bool operator!=(const Thread& rhs) const {
+      return this->_tid != rhs._tid || this->_thread.hash != rhs._thread.hash;
+    }
   };
 
-  std::ostream& operator<<(std::ostream& os, const ProcessID& info) {
+  std::ostream& operator<<(std::ostream& os, const Thread& info) {
     os << "[" << info.pid() << ":" << info.tid() << "] "
        << info.process() << " / " << info.thread();
 
     return os;
   }
 
-  inline int32_t parsePID(const char* dir) {
+  inline int32_t parse_id(const dir_entry & directory) {
+    const char* dir = directory.path().filename().c_str();
     int32_t pid = 0;
 
     while ('0' <= *dir && *dir <= '9') {
@@ -119,6 +150,26 @@ namespace PIDTrace {
     }
 
     return (*dir == '\0') ? pid : -1;
+  }
+
+  inline int32_t total_threads() {
+    char buffer[MAX_LOADAVG_SIZE]; int fd;
+
+    int32_t threads = 0;
+    if (0 <= (fd = open(LOAD_AVG_PATH, O_RDONLY))) {
+      if (0 <= read(fd, buffer, MAX_LOADAVG_SIZE)) {
+        char* ptr = buffer;
+
+        while (*ptr++ != '/');
+        while (*ptr != ' ') {
+          threads = threads * 10 + (*ptr++) - '0';
+        }
+      }
+
+      close(fd);
+    }
+
+    return threads;
   }
 }
 

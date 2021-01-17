@@ -134,7 +134,7 @@ namespace PIDTrace {
     }
   };
 
-  std::ostream& operator<<(std::ostream& os, const Thread& info) {
+  inline std::ostream& operator<<(std::ostream& os, const Thread& info) {
     os << "[" << info.pid() << ":" << info.tid() << "] "
        << info.process() << " / " << info.thread();
 

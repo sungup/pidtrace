@@ -22,13 +22,14 @@ std::vector<PIDTrace::Thread> load_thread_list() {
   const auto processor_count = std::thread::hardware_concurrency();
   auto threads = std::vector<PIDTrace::Thread>(size + processor_count);
 
-  Thread process;
-  int32_t pid, tid;
-  char task_home[MAX_PID_TASK_PATH_LEN];
-
   size = 0;
   for (const auto & p_path : directory_iterator("/proc")) {
+    Thread process;
+    int32_t pid, tid;
+
     if ((0 <= (pid = parse_id(p_path))) && process.load_process(pid)) {
+      char task_home[MAX_PID_TASK_PATH_LEN];
+
       // c/c++ mixed manner
       sprintf(task_home, "%s/task", p_path.path().c_str());
 
@@ -46,93 +47,129 @@ std::vector<PIDTrace::Thread> load_thread_list() {
   return threads;
 }
 
-bool load_thread_list(std::vector<PIDTrace::Thread>& threads) {
-  ssize_t size;
-  if ((size = PIDTrace::total_threads()) <= 0) {
-    return false;
+void control_thread(int send_fd, std::chrono::milliseconds sleep_duration) {
+  char buffer(1);
+
+  while (true) {
+    std::this_thread::sleep_for(sleep_duration);
+
+    write(send_fd, &buffer, 1);
   }
 
-  const auto processor_count = std::thread::hardware_concurrency();
-  threads.resize(size + processor_count);
+exit_control_thread:
+  close(send_fd);
+}
 
-  Thread process;
-  int32_t pid, tid;
-  char task_home[MAX_PID_TASK_PATH_LEN];
+class ThreadTracker {
+private:
+  std::ostream& _tracker;
+  int           _pipe;
 
-  size = 0;
-  for (const auto & p_path : directory_iterator("/proc")) {
-    if ((0 <= (pid = parse_id(p_path))) && process.load_process(pid)) {
-      // c/c++ mixed manner
-      sprintf(task_home, "%s/task", p_path.path().c_str());
+public:
+  ThreadTracker(std::ostream& output, int i_pipe)
+    : _tracker(output),
+      _pipe(i_pipe)
+  { }
 
-      for (const auto& t_path : directory_iterator(task_home)) {
-        if ((0 <= (tid = parse_id(t_path))) &&
-            threads[size].load_thread(process, tid)) {
-          ++size;
-        }
+  [[nodiscard]] int pipe_fd() const {
+    return _pipe;
+  }
+
+  std::ostream& fout() {
+    return _tracker;
+  }
+
+  void Close() {
+    close(this->_pipe);
+  }
+};
+
+std::vector<PIDTrace::Thread> check_new_thread(std::vector<PIDTrace::Thread>& old, ThreadTracker* tracker) {
+  std::vector<PIDTrace::Thread> now = load_thread_list();
+
+  auto tick = std::chrono::time_point_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now());
+  auto epoch = std::chrono::duration_cast<std::chrono::nanoseconds>(tick.time_since_epoch());
+
+  auto now_item = now.begin();
+  auto old_item = old.begin();
+
+  while (now_item != now.end() && old_item != old.end()) {
+    if (old_item->tid() == now_item->tid()) {
+      // 1. old.tid == new.tid
+      if (*old_item != *now_item) {
+        tracker->fout() << epoch.count() << ": " << *now_item << std::endl;
       }
+
+      ++now_item; ++old_item;
+    } else if (old_item->tid() < now_item->tid()) {
+      // 2. old.tid < new.tid
+      ++old_item;
+
+    } else {
+      // 3. old.tid > new.tid
+      tracker->fout() << epoch.count() << ": " << *now_item << std::endl;
+      ++now_item;
     }
   }
 
-  threads.resize(size);
+  while (now_item != now.end()) {
+    tracker->fout() << epoch.count() << ": " << *now_item << std::endl;
+    ++now_item;
+  }
 
-  return true;
+  return now;
 }
 
-std::chrono::microseconds return_with_sort(int loop_count) {
-  std::chrono::steady_clock::time_point begin, end;
+void *pipe_handler_routine(void *data) {
+  auto* tracker = (ThreadTracker*)data;
 
-  begin = std::chrono::steady_clock::now();
-  for (int i = 0; i < loop_count; ++i) {
-    auto threads = load_thread_list();
+  constexpr int MAX_PIPE_BUFFER = 16;
+  char  buffer[MAX_PIPE_BUFFER];
+  int read_len;
 
-    std::sort(threads.begin(), threads.end());
+  std::vector<PIDTrace::Thread> threads;
+
+  while (true) {
+    read_len = read(tracker->pipe_fd(), buffer, MAX_PIPE_BUFFER);
+
+    for (int i = 0; i < read_len; ++i) {
+      if (buffer[i] == '\0') {
+        goto exit_pipe_handler;
+      }
+
+      threads = check_new_thread(threads, tracker);
+    }
+
   }
-  end = std::chrono::steady_clock::now();
 
-  return std::chrono::duration_cast<std::chrono::microseconds>(end - begin);
-}
+  exit_pipe_handler:
 
-std::chrono::microseconds call_by_ref_with_sort(int loop_count) {
-  std::chrono::steady_clock::time_point begin, end;
-  std::vector<Thread> threads;
-
-  begin = std::chrono::steady_clock::now();
-  for (int i = 0; i < loop_count; ++i) {
-    load_thread_list(threads);
-
-    std::sort(threads.begin(), threads.end());
-  }
-  end = std::chrono::steady_clock::now();
-
-  return std::chrono::duration_cast<std::chrono::microseconds>(end - begin);
+  return nullptr;
 }
 
 int main() {
-  const int LOOP_COUNT = 100;
-  const int SAMPLING_COUNT = 100;
+  pthread_t scan_thread;
+  int       thread_status;
+  int       pipe_fd[2];
 
-  std::ofstream csv("test_type.csv");
+  auto sleep_duration = std::chrono::milliseconds(100); // 1 second
 
-  csv << ",return vector"
-      << ",call by ref vector"
-      << ",return vector"
-      << ",call by ref vector"
-      << std::endl;
-
-  for (int i = 0; i < SAMPLING_COUNT; ++i) {
-    auto micro_return_with_sort         = return_with_sort(LOOP_COUNT);
-    auto micro_call_by_ref_with_sort    = call_by_ref_with_sort(LOOP_COUNT);
-
-    csv << "Try " << i << ","
-        << micro_return_with_sort.count() << ","
-        << micro_call_by_ref_with_sort.count() << ","
-        << micro_return_with_sort.count() / LOOP_COUNT << ","
-        << micro_call_by_ref_with_sort.count() / LOOP_COUNT << ","
-        << std::endl;
+  if (pipe(pipe_fd) < 0) {
+    std::cerr << "pipe creation failed" << std::endl;
+    exit(-1);
   }
 
-  csv.close();
+  ThreadTracker tracker(std::cout, pipe_fd[0]);
+
+  if (pthread_create(&scan_thread, nullptr, pipe_handler_routine, (void*)(&tracker)) != 0) {
+    std::cerr << "creation failed" << std::endl;
+    exit(-1);
+  }
+
+  control_thread(pipe_fd[1], sleep_duration);
+
+  pthread_join(scan_thread, (void**)&thread_status);
+  tracker.Close();
 
   return 0;
 }

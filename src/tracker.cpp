@@ -2,9 +2,10 @@
 // Created by sungup on 2021/01/17.
 //
 
+#include <filesystem>
+#include <iostream>
 #include <thread>
 #include <vector>
-#include <filesystem>
 
 #include "tracker.h"
 
@@ -24,7 +25,8 @@ const char* PIDTraceError::what() const noexcept
 
 // main ThreadTracker object
 ThreadTracker::ThreadTracker(std::ostream& output)
-  : _out(output)
+  : _out(output),
+    _ready(false)
 {
   if (pipe(this->_pipe) < 0) {
     throw PIDTraceError("create _pipe has been failed");
@@ -41,7 +43,7 @@ void ThreadTracker::_run_issuer(std::chrono::milliseconds sleep_duration)
 {
   char buffer(1);
 
-  while (true) {
+  while (this->_ready) {
     std::this_thread::sleep_for(sleep_duration);
 
     write(this->_pipe[WRITE], &buffer, 1);
@@ -50,12 +52,9 @@ void ThreadTracker::_run_issuer(std::chrono::milliseconds sleep_duration)
 
 void ThreadTracker::_trace()
 {
-  constexpr int MAX_PIPE_BUFFER = 16;
   char buffer[MAX_PIPE_BUFFER];
 
-  std::vector<Thread> threads;
-
-  while (true) {
+  while (this->_ready) {
     int len = read(this->_pipe[READ], buffer, MAX_PIPE_BUFFER);
 
     for (int i = 0; i < len; ++i) {
@@ -63,14 +62,15 @@ void ThreadTracker::_trace()
         return;
       }
 
-      threads = this->_trace_new_thread(threads);
+      this->_trace_new_thread();
     }
   }
 }
 
-std::vector<Thread> ThreadTracker::_trace_new_thread(std::vector<Thread>& old)
+void ThreadTracker::_trace_new_thread()
 {
-  auto now = ThreadTracker::_load_threads();
+  auto& old = this->_latest;
+  auto  now = ThreadTracker::_load_threads();
 
   auto tick = std::chrono::time_point_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now());
   auto epoch = std::chrono::duration_cast<std::chrono::nanoseconds>(tick.time_since_epoch());
@@ -102,7 +102,8 @@ std::vector<Thread> ThreadTracker::_trace_new_thread(std::vector<Thread>& old)
     ++now_item;
   }
 
-  return now;
+  // swap old and now
+  this->_latest.swap(now);
 }
 
 std::vector<Thread> ThreadTracker::_load_threads()
@@ -151,13 +152,22 @@ void* ThreadTracker::_tracking_handler(void *data)
 
 void ThreadTracker::start(std::chrono::milliseconds sleep_duration)
 {
-  if (
-    pthread_create(&this->_scanner, nullptr, _tracking_handler, (void *) (this)) != 0) {
+  this->_ready = true;
+
+  // run tracing thread to child thread
+  if (pthread_create(&this->_scanner, nullptr, _tracking_handler, (void *) this) != 0) {
     throw PIDTraceError("create thread failed");
   }
 
+  // run issue trigger in the parent thread
   this->_run_issuer(sleep_duration);
 
-  int thread_status;
-  pthread_join(this->_scanner, (void**)&thread_status);
+  // wait until child thread end
+  pthread_join(this->_scanner, nullptr);
+}
+
+void ThreadTracker::stop()
+{
+  std::cout << "stop thread tracker" << std::endl;
+  this->_ready = false;
 }

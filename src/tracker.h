@@ -28,17 +28,22 @@ namespace PIDTrace {
 
   class ThreadTracker {
   private:
-    const int READ = 0;
-    const int WRITE =1;
+    const int MAX_PIPE_BUFFER = 16;
+    const int READ  = 0;
+    const int WRITE = 1;
+
+    bool _ready;
 
     std::ostream& _out;
 
     int       _pipe[2]{};
     pthread_t _scanner{};
 
+    std::vector<Thread> _latest;
+
     void _run_issuer(std::chrono::milliseconds sleep_duration);
     void _trace();
-    std::vector<Thread> _trace_new_thread(std::vector<Thread>& old);
+    void _trace_new_thread();
 
     static std::vector<Thread> _load_threads();
     static void *_tracking_handler(void* data);
@@ -48,6 +53,7 @@ namespace PIDTrace {
     ~ThreadTracker();
 
     void start(std::chrono::milliseconds sleep_duration);
+    void stop();
   };
 }
 

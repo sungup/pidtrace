@@ -20,10 +20,19 @@ namespace PIDTrace {
     std::string _message{};
 
   public:
-    explicit PIDTraceError(std::string message) noexcept;
+    explicit PIDTraceError(std::string message) noexcept
+      : _message(std::move(message))
+    { }
+
+    PIDTraceError(const PIDTraceError& e) noexcept
+      : _message(e._message)
+    { }
+
     ~PIDTraceError() override = default;
 
-    [[nodiscard]] const char* what() const noexcept override;
+    [[nodiscard]] const char* what() const noexcept override {
+      return this->_message.c_str();
+    }
   };
 
   class ThreadTracker {

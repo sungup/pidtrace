@@ -1,49 +1,87 @@
+#include <cstdlib>
 #include <iostream>
-
-#include <boost/program_options.hpp>
 #include <fstream>
+
+#include <getopt.h>
 
 #include "tracker.h"
 
-namespace po = boost::program_options;
+const uint64_t default_interval = 100;
+const char*    default_output   = "stdout";
 
 struct ArgOpts {
-  int         interval = 100;
+  uint64_t    interval = 100;
   std::string dump_to;
+
+  ArgOpts(uint64_t interval, const char* dump_to)
+    : interval(interval), dump_to(dump_to)
+  { }
 };
 
-ArgOpts parse_opts(int argc, char* argv[]) {
-  const int   default_interval = 100;
-  const char* default_output   = "stdout";
+void print_opts(char* argv0, int exit_code) {
+  using namespace std;
+  cout
+    << "pidtrace" << endl
+    << "pidtrace is a thread creation tracking tool using linux /proc. This tool will" << endl
+    << "be monitoring the directory structure under /proc periodically, so it can be"  << endl
+    << "missing some threads. If you cannot use the ftrace or strace on your system,"  << endl
+    << "this tool will be helpful for tracking new threads. But, if you are familiar"  << endl
+    << "with ftrace or strace, that tools are more powerful than pidtrace! :)"         << endl
+    << endl;
 
-  ArgOpts opts;
+  cout
+    << "Usage: " << argv0 << " [OPTIONS]"                                  << endl
+    << "  -i,--interval [usec] PID scanning interval."                     << endl
+    << "                       (Default: " << default_interval << " usec)" << endl
+    << "  -o,--output [path]   Dump output target or stdout/stderr"        << endl
+    << "                       (Default: " << default_output << ")"        << endl
+    << "  -h,--help            Print help message."                        << endl
+    << endl;
 
-  po::options_description desc("Allowed options");
-  desc.add_options()
-    ("help,h", "produce help message")
-    ("interval,i", po::value<int>(&opts.interval)->default_value(default_interval), "run interval (millisecond)")
-    ("file,f", po::value<std::string>(&opts.dump_to)->default_value(default_output), "default output file path");
+  cout
+    << "Author: Sungup Moon <sungup@me.com>" << endl;
 
-  po::variables_map vm;
-  po::store(po::parse_command_line(argc, argv, desc), vm);
-  po::notify(vm);
-
-  if (vm.count("help")) {
-    std::cout << "pidtrace" << std::endl
-              << "The pidtrace is a thread creation tracking tool using linux /proc. This tool" << std::endl
-              << "will be monitoring the directory structure under /proc periodically, so it can" << std::endl
-              << "be missing some threads. If you cannot use the ftrace or strace on your system," << std::endl
-              << "this tool will be helpful for tracking new threads. But, if you are familiar" << std::endl
-              << "with ftrace or strace, that tools are more powerful than pidtrace! :)" << std::endl
-              << std::endl;
-    std::cout << desc << std::endl;
-
-    std::cout << "Author: Sungup Moon <sungup@me.com>" << std::endl;
-    exit(1);
-  }
-
-  return opts;
+  exit(exit_code);
 }
+
+ArgOpts parse_opts(int argc, char* argv[]) {
+  ArgOpts opts = {default_interval, default_output};
+
+  static struct option long_options[] = {
+    {"help",     no_argument,       nullptr, 'h'},
+    {"interval", required_argument, nullptr, 'i'},
+    {"output",   required_argument, nullptr, 'o'},
+    {nullptr,    no_argument,       nullptr, 0}
+  };
+
+  while (true) {
+    int opt_index = 0;
+    int c = getopt_long(argc, argv, "hi:o:", long_options, &opt_index);
+
+    switch (c) {
+      case -1:
+      case 0:
+        return opts;
+
+      case 'h':
+        print_opts(argv[0], 0);
+        break;
+
+      case 'i':
+        opts.interval = std::strtol(optarg, nullptr, 10);
+        break;
+
+      case 'o':
+        opts.dump_to = std::string(optarg);
+        break;
+
+      default:
+        print_opts(argv[0], -1);
+        break;
+    }
+  }
+}
+
 
 int main(int argc, char* argv[]) {
   auto opts = parse_opts(argc, argv);

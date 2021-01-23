@@ -9,13 +9,21 @@
 #include <cstdint>
 #include <cstdlib>
 
+#if __GNUC__ >= 8
 #include <filesystem>
+#else
+#include <experimental/filesystem>
+#endif
 
 #include <fcntl.h>
 #include <unistd.h>
 
 namespace PIDTrace {
+#if __GNUC__ >= 8
   typedef std::filesystem::directory_entry dir_entry;
+#else
+  typedef std::experimental::filesystem::directory_entry dir_entry;
+#endif
 
   const int  MAX_PROC_NAME     = 16;
   const int  MAX_COMM_PATH_LEN = (6 + 7 + 6 + 7 + 6);

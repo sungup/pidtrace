@@ -2,7 +2,12 @@
 // Created by sungup on 2021/01/17.
 //
 
+#if __GNUC__ >= 8
 #include <filesystem>
+#else
+#include <experimental/filesystem>
+#endif
+
 #include <iostream>
 #include <thread>
 #include <vector>
@@ -10,18 +15,12 @@
 #include "tracker.h"
 
 using namespace PIDTrace;
+
+#if __GNUC__ >= 8
 using namespace std::filesystem;
-
-// exception handling
-PIDTraceError::PIDTraceError(std::string message) noexcept
-  : _message(std::move(message))
-{ }
-
-const char* PIDTraceError::what() const noexcept
-{
-  return this->_message.c_str();
-}
-
+#else
+using namespace std::experimental::filesystem;
+#endif
 
 // main ThreadTracker object
 ThreadTracker::ThreadTracker(std::ostream& output)
